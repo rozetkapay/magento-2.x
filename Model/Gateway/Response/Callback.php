@@ -22,6 +22,8 @@ class Callback implements CallbackInterface
 {
     const SUCCESS = 'transaction_successful';
 
+    const SIGNATURE_HEADER = 'X-Rozetkapay-Signature';
+
     private $request;
 
     /**
@@ -112,7 +114,12 @@ class Callback implements CallbackInterface
     public function execute()
     {
         try {
-            $params = $this->serializer->unserialize($this->request->getContent());
+            $rawBody = $this->request->getContent();
+            if (!$this->verifySignature($rawBody)) {
+                $this->logger->critical('RozetkaPay callback: wrong signature');
+                return;
+            }
+            $params = $this->serializer->unserialize($rawBody);
             $this->rozetkaLogger->info('Callback', $params);
             $orderId = $params['external_id'];
             if ($this->rozetkaConfig->isSandboxMode()) {
@@ -131,6 +138,23 @@ class Callback implements CallbackInterface
         } catch (\Exception $e) {
             $this->logger->critical($e->getMessage());
         }
+    }
+
+    /**
+     * Verify callback signature.
+     *
+     * Algorithm: base64url(sha1(password . rawBody . password, raw_binary)).
+     *
+     * @param string $rawBody
+     * @return bool
+     */
+    private function verifySignature($rawBody)
+    {
+        $password = (string) $this->rozetkaConfig->getShopPass();
+        $original = (string) $this->request->getHeader(self::SIGNATURE_HEADER);
+        $calculated = strtr(base64_encode(sha1($password . $rawBody . $password, true)), '+/', '-_');
+
+        return hash_equals($calculated, $original);
     }
 
     /**
